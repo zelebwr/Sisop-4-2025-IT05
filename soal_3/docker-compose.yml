@@ -1,0 +1,37 @@
+version: '3'
+
+services:
+  antink-server:
+    build: .
+    volumes:
+      - it24_host:/original_file
+      - antink_mount:/antink_mount
+      - antink-logs:/var/log
+    privileged: true
+    command: /app/antink /antink_mount -o allow_other -o modules=subdir -o subdir=/original_file
+
+  antink-logger:
+    image: alpine
+    volumes:
+      - antink-logs:/var/log
+    command: tail -f /var/log/it24.log
+
+volumes:
+  it24_host:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./original
+  antink_mount:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./mount
+  antink-logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./logs
