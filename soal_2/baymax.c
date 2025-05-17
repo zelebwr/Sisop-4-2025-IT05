@@ -17,6 +17,12 @@
 #define RELICS_DIR "relics"
 #define LOG_FILE "activity.log"
 
+struct file_handle {
+    int is_new;
+    off_t total_read; // total bytes read
+    off_t file_size; // size of the file
+};
+
 void log_activity(const char *action, const char *filename) {
     time_t now = time(NULL);
     struct tm *tm = localtime(&now);
@@ -53,7 +59,7 @@ static int baymax_getattr(const char *path, struct stat *stbuf) {
     }
 
     if (total_size > 0) {
-        stbuf->st_mode = S_IFREG | 0444; // regular file with read-only permission
+        stbuf->st_mode = S_IFREG | 0644; // regular file with read-only permission
         stbuf->st_nlink = 1; // one link
         stbuf->st_size = total_size; // set the size of the file
         return 0; 
@@ -88,14 +94,34 @@ static int baymax_readdir(const char *path, void *buf, fuse_fill_dir_t filler, o
 static int baymax_open (const char *path, struct fuse_file_info *fi) {
     char first_fragment[256]; // first fragment name
     snprintf(first_fragment, sizeof(first_fragment), "%s/%s.000", RELICS_DIR, path + 1); // make the first fragment name
+
+    int file_existed = (access(first_fragment, F_OK) == 0);
     
-    if (access(first_fragment, F_OK) == -1) return -ENOENT; // if the first fragment does not exist
+    struct file_handle *fh = malloc(sizeof(struct file_handle));
+    fh->is_new = !file_existed;
+    fi->fh = (uint64_t)fh;
+
+    struct stat st; 
+    if (file_existed && stat(first_fragment, &st) == 0) {
+        fh->file_size = st.st_size; // set the size of the file
+        for (int i = 1; ; i++) {
+            char fragment_path[300]; 
+            snprintf(fragment_path, sizeof(fragment_path), "%s.%03d", first_fragment, i); // make the path for the fragment
+            if (stat(fragment_path, &st) == -1) break; // if there's no said file, break
+            fh->file_size += st.st_size; // if there's the said file, increase the total size of the will-be-created file
+        }
+    } else {
+        fh->file_size = 0; // set the size of the file to 0
+    }
+
+    fi->fh = (uint64_t)fh; // set the file handle  
 
     log_activity("READ", path + 1);
     return 0; 
 }
 
 static int baymax_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
+    struct file_handle *fh = (struct file_handle *)fi->fh; // get the file handle
     char base_path[256]; // base path for file checking
     snprintf(base_path, sizeof(base_path), "%s/%s", RELICS_DIR, path + 1); // make the base path
 
@@ -117,14 +143,144 @@ static int baymax_read(const char *path, char *buf, size_t size, off_t offset, s
         fragment_index++; 
         fclose(fragment);
     }
+
+    fh->total_read += bytes_read; // update total bytes read
     return bytes_read; // return the number of bytes read
 }
 
+static int baymax_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
+    char base_path[256]; // base path for file checking
+    snprintf(base_path, sizeof(base_path), "%s/%s", RELICS_DIR, path + 1); // make the base path
+
+    size_t bytes_written = 0; // bytes written
+    while (bytes_written < size) {
+        int fragment_index = (offset + bytes_written) / FRAGMENT_SIZE; // fragment index
+        off_t fragment_offset = (offset + bytes_written) % FRAGMENT_SIZE; // offset in fragment
+        
+        char fragment_path[300];
+        snprintf(fragment_path, sizeof(fragment_path), "%s.%03d", base_path, fragment_index); // make fragment path
+
+        FILE *fragment = fopen(fragment_path, "wb+");
+        if (!fragment) return -errno; // if it fails to open the fragment
+
+        fseek(fragment, fragment_offset, SEEK_SET); // set the offset
+        size_t write_size = FRAGMENT_SIZE - fragment_offset; // size to write
+        if (write_size > size - bytes_written) write_size = size - bytes_written;
+
+        fwrite(buf + bytes_written, 1, write_size, fragment);
+        bytes_written += write_size; 
+        fclose(fragment);
+    }
+    return size; 
+}
+
+static int baymax_release (const char *path, struct fuse_file_info *fi)  {
+    struct file_handle *fh = (struct file_handle *)fi->fh;
+
+    if (fh->total_read == fh->file_size && fh->file_size > 0) {
+        char log_message[256];
+        snprintf(log_message, sizeof(log_message), "%s -> %s", path + 1, path + 1);
+        log_activity("COPY", log_message); // log the close activity
+    }
+    
+
+    if (fh->is_new) {
+        char base_path[256]; // base path for file checking
+        snprintf(base_path, sizeof(base_path), "%s/%s", RELICS_DIR, path + 1); // make the base path
+
+        int count = 0; // to count the number of fragments
+        off_t total_size = 0; // total size of the file
+
+        for (int i = 0; ; i++) {
+            char fragment_path[300]; // fragment path
+            snprintf(fragment_path, sizeof(fragment_path), "%s.%03d", base_path, i); // make the fragment path
+
+            struct stat st; 
+            if (stat(fragment_path, &st) == -1) break; // if the fragment does not exist
+            count++;
+            total_size += st.st_size; // accumulate the total size
+        }
+
+        fh->file_size = total_size; // set the size of the file
+
+        if (count > 0) {
+            char log_message[1024];
+            snprintf(log_message, sizeof(log_message), "%s -> ", path + 1);
+            for (int i = 0; i < count; i++) {
+                char temp[50]; 
+                snprintf(temp, sizeof(temp), "%s.%03d", path + 1, i);
+                strcat(log_message, temp);
+                if (i < count - 1) strcat(log_message, ", ");
+            }
+            log_activity("WRITE", log_message);
+        }
+    }
+    free(fh); 
+    return 0;
+}
+
+static int baymax_unlink(const char *path) {
+    char base_path[300]; 
+    snprintf(base_path, sizeof(base_path), "%s/%s", RELICS_DIR, path + 1); // make the base path
+
+    // first and last fragment index
+    int first = -1, 
+        last = -1, 
+        i = 0;
+
+    while (1) {
+        char fragment_path[320]; 
+        snprintf(fragment_path, sizeof(fragment_path), "%s.%03d", base_path, i); // make the fragment path
+        if (remove(fragment_path) == 0) { // remove the fragment
+            if (first == -1) first = i; // set the first fragment index
+            last = i; // set the last fragment index
+            i++;
+        } else {
+            if (errno == ENOENT) break; // if the fragment does not exist
+            else return -errno; // if it fails to remove the fragment
+        }
+    }
+
+    if (first != -1) {
+        char log_message[256];
+        if (first == last) {
+            snprintf(log_message, sizeof(log_message), "%s.%03d", path + 1, first);
+        } else {
+            snprintf(log_message, sizeof(log_message), "%s.%03d - %s.%03d", path + 1, first, path + 1, last);
+        }
+        log_activity("DELETE", log_message); // log the delete activity
+        return 0;
+    }
+    return -ENOENT; // file not found
+}
+
+static int baymax_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
+    char base_path[256];
+    snprintf(base_path, sizeof(base_path), "%s/%s.000", RELICS_DIR, path + 1);
+
+    // Buat fragment pertama secara eksplisit
+    FILE *fragment = fopen(base_path, "wb");
+    if (!fragment) return -errno;
+    fclose(fragment);
+
+    return 0;
+}
+
+static int baymax_truncate(const char *path, off_t size) {
+    (void)path; (void)size; // Tidak diperlukan untuk kasus ini
+    return 0;
+}
+
 static struct fuse_operations baymax_oper = {
-    .getattr = baymax_getattr,  // Fungsi untuk metadata
-    .readdir = baymax_readdir,  // Fungsi untuk list direktori
-    .open = baymax_open,     // Fungsi untuk buka file
-    .read = baymax_read,     // Fungsi untuk baca file
+    .getattr = baymax_getattr,  // function for metadata
+    .readdir = baymax_readdir,  // function for list directory
+    .open = baymax_open,     // function for open file
+    .read = baymax_read,     // function for read file
+    .write = baymax_write,   // function for write file
+    .release = baymax_release, // function for close file
+    .unlink = baymax_unlink, // function for delete file
+    .create = baymax_create, // function for create file
+    .truncate = baymax_truncate, // function for truncate file
 };
 
 int main(int argc, char *argv[]) {
