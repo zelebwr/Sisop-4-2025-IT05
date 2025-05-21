@@ -9,13 +9,93 @@
 #include <sys/stat.h> // for file status
 #include <errno.h> // for error handling
 #include <time.h> // for time functions
+#include <ctype.h> // for character handling
 // #include <sys/time.h> // for time functions
 // #include <sys/types.h> // for data types
 // #include <fcntl.h> // for file control options
 
 #define FRAGMENT_SIZE 1024
-#define RELICS_DIR "relics"
+#define RELICS_DIR "./relics"
 #define LOG_FILE "activity.log"
+
+static int baymax_getattr(const char *path, struct stat *stbuf) {
+    memset(stbuf, 0, sizeof(struct stat)); // clear stat struct memory
+    
+    // if it's a root directory
+    if (strcmp(path, "/") == 0) { 
+        stbuf->st_mode = S_IFDIR | 0755; // set as directory with read, write, execute permissions
+        stbuf->st_nlink = 2; // links to "." and ".."
+        return 0; 
+    }
+
+    char *base_path = strrchr(path, '/') + 1; // get the base path after the last "/"
+
+    DIR *dir = opendir(RELICS_DIR); // open relics directory
+    if (!dir) return -errno; // if it fails to open the directory
+
+    off_t total_size = 0; // total size of the file
+    struct dirent *entry; // entry struct for the directory
+
+    while ((entry = readdir(dir))) {
+        char *name = entry->d_name; // get the name of the entry
+
+        if (strncmp(name, base_path, strlen(base_path)) == 0) { // if the name starts with the base path
+            char *dot = strrchar(name, '.'); // find the last dot in the name
+            if (dot && strlen(dot) == 4 && isdigit(dot[1]) && isdigit(dot[2]) && isdigit(dot[3])) { // if the name has a dot and the next 3 characters are digits
+                struct stat fragment_stat;
+                stat(name, &fragment_stat); // get fragment stat
+                total_size += fragment_stat.st_size; // accumulate size
+            }
+        }
+    }
+
+    closedir(dir); // close the directory
+
+    if (total_size > 0) {
+        stbuf->st_mode = S_IFREG | 0644; // regular file with read-only permission
+        stbuf->st_size = total_size; // set the size of the file
+        return 0; 
+    }
+
+    return -ENOENT; // file not found
+}
+
+static int baymax_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi) {
+    if (strcmp(path, "/") != 0) return -ENOENT; // if the path is not root directory, meaning "No such file or directory" error
+
+    filler(buf, ".", NULL, 0); // current directory
+    filler(buf, "..", NULL, 0); // parent directory
+
+    DIR *dir = opendir(RELICS_DIR); // open relics directory
+    if (dir == NULL) return -errno; // if it fails to open the directory
+
+    char current_file[256] = ""; // current file name
+    struct dirent *entry; // entry for the directory
+    
+    while ((entry = readdir(dir))) {
+        char *dot = strrchr(entry->d_name, '.'); // find the dot in the file name
+        if (dot && strcmp(dot+1, "000") == 0) { // if the file name has a dot and the next 3 characters are "000" = the first fragment
+            *dot = '\0'; // remove the dot and the next 3 characters
+            if (strcmp(current_file, entry->d_name) != 0) { // if the file name is not the same as the current file name
+                filler(buf, entry->d_name, NULL, 0); // add the file name to the buffer
+                strcpy(current_file, entry->d_name); // set the current file name to the new file name
+            }
+        }
+    }
+    closedir(dir); 
+    return 0; 
+}
+
+
+static struct fuse_operations baymax_oper ={
+    .getattr = baymax_getattr,
+    .readdir = baymax_readdir,
+    .open = baymax_open,
+    .read = baymax_read,
+    .create = baymax_create,
+    .write = baymax_write,
+    .unlink = baymax_unlink,
+};
 
 struct file_handle {
     int is_new;
@@ -36,60 +116,7 @@ void log_activity(const char *action, const char *filename) {
     }
 }
 
-static int baymax_getattr(const char *path, struct stat *stbuf) {
-    memset(stbuf, 0, sizeof(struct stat));
-    
-    if (strcmp(path, "/") == 0) { 
-        stbuf->st_mode = S_IFDIR | 0755; 
-        stbuf->st_nlink = 2; 
-        return 0;
-    }
 
-    char base_path[256]; // base path for file checking
-    snprintf(base_path, sizeof(base_path), "%s/%s", RELICS_DIR, path + 1); // after the "/"
-
-    int total_size = 0; 
-    for (int i = 0; ; i++) {
-        char fragment_path[300]; 
-        snprintf(fragment_path, sizeof(fragment_path), "%s.%03d", base_path, i); // make the path for the fragment
-
-        struct stat fragment_stat; 
-        if (stat(fragment_path, &fragment_stat) == -1) break; // if there's no said file, break
-        total_size += fragment_stat.st_size; // if there's the said file it will increase the total size of the will-be-created file
-    }
-
-    if (total_size > 0) {
-        stbuf->st_mode = S_IFREG | 0644; // regular file with read-only permission
-        stbuf->st_nlink = 1; // one link
-        stbuf->st_size = total_size; // set the size of the file
-        return 0; 
-    }
-
-    return -ENOENT; // file not found
-}
-
-static int baymax_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi) {
-    filler(buf, ".", NULL, 0); // current directory
-    filler(buf, "..", NULL, 0); // parent directory
-
-    DIR *dir = opendir(RELICS_DIR); // open relics directory
-    if (dir == NULL) return -errno; // if it fails to open the directory
-    struct dirent *entry; // entry for the directory
-    char current_file[256] = ""; // current file name
-
-    while ((entry = readdir(dir)) != NULL) {
-        char *dot = strrchr(entry->d_name, '.'); // find the dot in the file name
-        if (dot && strcmp(dot+1, "000") == 0) { // if the file name has a dot and the next 3 characters are "000" = the first fragment
-            *dot = '\0'; // remove the dot and the next 3 characters
-            if (strcmp(current_file, entry->d_name) != 0) { // if the file name is not the same as the current file name
-                filler(buf, entry->d_name, NULL, 0); // add the file name to the buffer
-                strcpy(current_file, entry->d_name); // set the current file name to the new file name
-            }
-        }
-    }
-    closedir(dir); 
-    return 0; 
-}
 
 static int baymax_open (const char *path, struct fuse_file_info *fi) {
     char first_fragment[256]; // first fragment name
