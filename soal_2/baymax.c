@@ -16,7 +16,7 @@
 
 #define FRAGMENT_SIZE 1024
 #define RELICS_DIR "./relics"
-#define LOG_FILE "activity.log"
+#define LOG_FILE "./activity.log"
 
 static int baymax_getattr(const char *path, struct stat *stbuf) {
     memset(stbuf, 0, sizeof(struct stat)); // clear stat struct memory
@@ -67,22 +67,45 @@ static int baymax_readdir(const char *path, void *buf, fuse_fill_dir_t filler, o
     filler(buf, "..", NULL, 0); // parent directory
 
     DIR *dir = opendir(RELICS_DIR); // open relics directory
-    if (dir == NULL) return -errno; // if it fails to open the directory
+    if (!dir) return -errno; // if it fails to open the directory
+
+    char *unique_files[256]; // array to store unique file names
+    int unique_count = 0; // count of unique files
 
     char current_file[256] = ""; // current file name
     struct dirent *entry; // entry for the directory
     
     while ((entry = readdir(dir))) {
-        char *dot = strrchr(entry->d_name, '.'); // find the dot in the file name
-        if (dot && strcmp(dot+1, "000") == 0) { // if the file name has a dot and the next 3 characters are "000" = the first fragment
-            *dot = '\0'; // remove the dot and the next 3 characters
-            if (strcmp(current_file, entry->d_name) != 0) { // if the file name is not the same as the current file name
-                filler(buf, entry->d_name, NULL, 0); // add the file name to the buffer
-                strcpy(current_file, entry->d_name); // set the current file name to the new file name
+        char *name = entry->d_name; // get the name of the entry
+
+        if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) continue; // skip current and parent directory
+
+        char *dot = strrchr(name, '.'); // find the dot in the file name
+        if (dot && strlen(dot) == 4 && isdigit(dot[1]) && isdigit(dot[2]) && isdigit(dot[3])) { // if the name has a dot and the next 3 characters are digits
+            char *base_name = strndup(name, dot - name); // get the base name before the dot
+
+            int is_duplicate = 0; // flag for duplicate check
+            for (int i = 0; i < unique_count; i++) {
+                if (strcmp(unique_files[i], base_name) == 0) { // if the file name is already in the list
+                    is_duplicate = 1; // set duplicate flag
+                    break;
+                }
+            }
+
+            if (!is_duplicate) { // if it's a unique file
+                unique_files[unique_count++] = base_name; // add to the list
+            } else {
+                free(base_name); // free the memory if it's a duplicate
             }
         }
     }
     closedir(dir); 
+
+    for (int i = 0; i < unique_count; i++) {
+        char *base_name = unique_files[i]; // get the base name
+        filler(buf, base_name, NULL, 0); // add to the buffer
+        free(base_name); // free the memory
+    }
     return 0; 
 }
 
@@ -97,6 +120,61 @@ static struct fuse_operations baymax_oper ={
     .unlink = baymax_unlink,
 };
 
+static int baymax_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
+    char *base = strrchr(path, '/') + 1; // get the base path after the last "/"
+    if (!base) return -ENOENT; // if the base path is NULL
+
+    DIR *dir = opendir(RELICS_DIR); // open relics directory
+    if (!dir) return -errno; // if it fails to open the directory
+
+    char *fragments[100]; 
+    int fragment_count = 0; // count of fragments
+
+    struct dirent *entry; // entry for the directory
+    while((entry = readdir(dir))) {
+        char *name = entry->d_name; // get the name of the entry
+
+        if (strcmp(name, base, strlen (base)) == 0) { // if the name starts with the base path
+            char *dot = strrchr(name, '.'); // find the dot in the file name
+            if (dot && strlen(dot) == 4 && isdigit(dot[1]) && isdigit(dot[2]) && isdigit(dot[3])) { // if the name has a dot and the next 3 characters are digits
+                fragments[fragment_count++] = strdup(name); // add to the fragments list
+            }
+        }
+    }
+
+    closedir(dir); // close the directory
+
+    for (int i = 0; i < fragment_count; i++) {
+        for (int j = i + 1; j < fragment_count; j++) {
+            
+    }
+    
+    struct file_handle *fh = (struct file_handle *)fi->fh; // get the file handle
+    char base_path[256]; // base path for file checking
+    snprintf(base_path, sizeof(base_path), "%s/%s", RELICS_DIR, path + 1); // make the base path
+
+    size_t bytes_read = 0; // bytes read
+    int fragment_index = offset / FRAGMENT_SIZE; // fragment index
+    off_t fragment_offset = offset % FRAGMENT_SIZE; // offset in fragment
+
+    while (bytes_read < size)  {
+        char fragment_path[300];
+        snprintf(fragment_path, sizeof(fragment_path), "%s.%03d", base_path, fragment_index); // make fragment path
+        
+        FILE *fragment = fopen(fragment_path, "rb");
+        if (!fragment) break; // fragment doesn't exist
+
+        fseek(fragment, fragment_offset, SEEK_SET); 
+        size_t read_size = fread(buf + bytes_read, 1, size - bytes_read, fragment);
+        bytes_read += read_size; // update bytes read
+        fragment_offset = 0; // reset offset for next fragment
+        fragment_index++; 
+        fclose(fragment);
+    }
+
+    fh->total_read += bytes_read; // update total bytes read
+    return bytes_read; // return the number of bytes read
+}
 struct file_handle {
     int is_new;
     off_t total_read; // total bytes read
@@ -145,34 +223,6 @@ static int baymax_open (const char *path, struct fuse_file_info *fi) {
 
     log_activity("READ", path + 1);
     return 0; 
-}
-
-static int baymax_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
-    struct file_handle *fh = (struct file_handle *)fi->fh; // get the file handle
-    char base_path[256]; // base path for file checking
-    snprintf(base_path, sizeof(base_path), "%s/%s", RELICS_DIR, path + 1); // make the base path
-
-    size_t bytes_read = 0; // bytes read
-    int fragment_index = offset / FRAGMENT_SIZE; // fragment index
-    off_t fragment_offset = offset % FRAGMENT_SIZE; // offset in fragment
-
-    while (bytes_read < size)  {
-        char fragment_path[300];
-        snprintf(fragment_path, sizeof(fragment_path), "%s.%03d", base_path, fragment_index); // make fragment path
-        
-        FILE *fragment = fopen(fragment_path, "rb");
-        if (!fragment) break; // fragment doesn't exist
-
-        fseek(fragment, fragment_offset, SEEK_SET); 
-        size_t read_size = fread(buf + bytes_read, 1, size - bytes_read, fragment);
-        bytes_read += read_size; // update bytes read
-        fragment_offset = 0; // reset offset for next fragment
-        fragment_index++; 
-        fclose(fragment);
-    }
-
-    fh->total_read += bytes_read; // update total bytes read
-    return bytes_read; // return the number of bytes read
 }
 
 static int baymax_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
