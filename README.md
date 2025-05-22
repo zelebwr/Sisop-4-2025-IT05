@@ -28,6 +28,10 @@ int main() {
 ### Explanation
 {Fill this with your explanation about the code}
 
+### Revision
+{Here if you have any revisions that you were told to do}
+
+
 # Soal 3
 
 ## Sub Soal a
@@ -215,11 +219,5 @@ Bind mount is used only for read-only access to the original files.
 Changes occur only at the mount point inside the container (/antink_mount).
 
 
-##Main Revision
+###Main Revision
 I couldn't run my code on Parrot OS because it requires Docker, and Docker isn't fully compatible with Parrot. I tried to install it, but the system kept throwing errors due to conflicts and missing support.
-
-### Revision
-{Here if you have any revisions that you were told to do}
-
-
-# Copy paste the above template below 
