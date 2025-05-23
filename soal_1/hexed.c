@@ -12,7 +12,7 @@
 #include <time.h>
 #include <ctype.h>
 
-const char *base_dir = "anomali";
+const char *base_dir = "/home/caca/Sisop-4-2025-IT05/soal_1/anomali";
 
 void run_command(char *cmd[]) {
     pid_t pid = fork();
@@ -28,7 +28,7 @@ void run_command(char *cmd[]) {
 
 void download_and_unzip() {
     struct stat st;
-    if (stat("anomali", &st) == 0 && S_ISDIR(st.st_mode)) return;
+    if (stat(base_dir, &st) == 0 && S_ISDIR(st.st_mode)) return;
 
     char *wget_cmd[] = {"wget", "https://drive.usercontent.google.com/u/0/uc?id=1hi_GDdP51Kn2JJMw02WmCOxuc3qrXzh5&export=download", "-O", "anomali.zip", NULL};
     run_command(wget_cmd);
@@ -53,7 +53,9 @@ void get_timestamp(char *date_str, size_t size1, char *time_str, size_t size2) {
 }
 
 void log_conversion(const char *txt_name, const char *png_name, const char *date, const char *time) {
-    FILE *log = fopen("anomali/conversion.log", "a");
+    char log_path[512];
+    snprintf(log_path, sizeof(log_path), "%s/conversion.log", base_dir);
+    FILE *log = fopen(log_path, "a");
     if (log) {
         fprintf(log, "[%s][%s]: Successfully converted hexadecimal text %s to %s.\n", date, time, txt_name, png_name);
         fclose(log);
@@ -73,10 +75,12 @@ void convert_file_to_image(const char *filename_txt) {
     char date[16], time[16];
     get_timestamp(date, sizeof(date), time, sizeof(time));
 
-    mkdir("anomali/image", 0755);
+    char image_dir[512];
+    snprintf(image_dir, sizeof(image_dir), "%s/image", base_dir);
+    mkdir(image_dir, 0755);
 
-    char output_path[256];
-    snprintf(output_path, sizeof(output_path), "anomali/image/%s_image_%s_%s.png", name_only, date, time);
+    char output_path[512];
+    snprintf(output_path, sizeof(output_path), "%s/%s_image_%s_%s.png", image_dir, name_only, date, time);
     FILE *output = fopen(output_path, "wb");
     if (!output) {
         fclose(input);
@@ -107,34 +111,35 @@ void convert_file_to_image(const char *filename_txt) {
 
 void process_all_files() {
     for (int i = 1; i <= 7; i++) {
-        char path[64];
-        snprintf(path, sizeof(path), "anomali/%d.txt", i);
+        char path[512];
+        snprintf(path, sizeof(path), "%s/%d.txt", base_dir, i);
         convert_file_to_image(path);
     }
 }
-
-// FUSE FUNCTIONS
 
 int is_txt_file(const char *path) {
     return strstr(path, ".txt") != NULL;
 }
 
-void get_real_path(char fpath[256], const char *path) {
-    snprintf(fpath, 256, "anomali%s", path);
+void get_real_path(char fpath[512], const char *path) {
+    snprintf(fpath, 512, "%s%s", base_dir, path);
 }
 
-void get_image_path(char img_path[256], const char *txt_path) {
+void get_image_path(char img_path[512], const char *txt_path) {
     char name_only[64] = {0};
     const char *filename = strrchr(txt_path, '/');
     filename = (filename) ? filename + 1 : txt_path;
     strncpy(name_only, filename, strcspn(filename, "."));
 
-    DIR *dir = opendir("anomali/image/");
+    char image_dir[512];
+    snprintf(image_dir, sizeof(image_dir), "%s/image/", base_dir);
+
+    DIR *dir = opendir(image_dir);
     if (dir) {
         struct dirent *ent;
         while ((ent = readdir(dir)) != NULL) {
             if (strstr(ent->d_name, name_only) && strstr(ent->d_name, ".png")) {
-                snprintf(img_path, 256, "anomali/image/%s", ent->d_name);
+                snprintf(img_path, 512, "%s%s", image_dir, ent->d_name);
                 break;
             }
         }
@@ -144,9 +149,9 @@ void get_image_path(char img_path[256], const char *txt_path) {
 
 int x_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi) {
     (void) fi;
-    char fpath[256];
+    char fpath[512];
     if (is_txt_file(path)) {
-        char img_path[256] = {0};
+        char img_path[512] = {0};
         get_image_path(img_path, path);
         if (strlen(img_path) > 0)
             return lstat(img_path, stbuf);
@@ -161,7 +166,7 @@ int x_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset,
     (void) fi;
     (void) flags;
 
-    char fpath[256];
+    char fpath[512];
     get_real_path(fpath, path);
     DIR *dp = opendir(fpath);
     if (!dp) return -errno;
@@ -177,9 +182,9 @@ int x_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset,
 }
 
 int x_open(const char *path, struct fuse_file_info *fi) {
-    char fpath[256];
+    char fpath[512];
     if (is_txt_file(path)) {
-        char img_path[256] = {0};
+        char img_path[512] = {0};
         get_image_path(img_path, path);
         if (strlen(img_path) > 0)
             snprintf(fpath, sizeof(fpath), "%s", img_path);
@@ -196,9 +201,9 @@ int x_open(const char *path, struct fuse_file_info *fi) {
 }
 
 int x_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
-    char fpath[256];
+    char fpath[512];
     if (is_txt_file(path)) {
-        char img_path[256] = {0};
+        char img_path[512] = {0};
         get_image_path(img_path, path);
         if (strlen(img_path) > 0)
             snprintf(fpath, sizeof(fpath), "%s", img_path);
