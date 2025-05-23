@@ -64,7 +64,7 @@ Automatically delete the zip file afterward
 Goal: Prepare the initial dataset of .txt files for further processing.
 
 ### Input/&Output
-![ThisIsInput/OutputImageOfAnExample.png](assets/temp.txt)
+![hexed/hexed.png](assets/soal_1/hexed.png)
 
 
 ### Code Block
@@ -116,6 +116,8 @@ Whenever a .txt file is accessed from the mounted directory (via FUSE), its cont
 Goal: Understand that each file contains encoded hex that must be transformed.
 Goal: Transparently transform .txt (hex) into .png (image) on access using FUSE.
 
+### Input & Output
+![hexed/hexed.png](assets/soal_1/hexed.png)
 
 ### Code Block
 ```c
@@ -145,6 +147,9 @@ void process_all_files() {
 > - Loops from 1.txt to 7.txt, converting each one if available.
 
 ##### FUSE Function
+
+### Input & Output
+![mnt/mnt.png](assets/soal_1/mkdirmnt.png)
 
 ### Code Block
 ```c
@@ -342,6 +347,9 @@ Each generated image must follow a specific naming format:
 ```[original_filename]_image_[YYYY-mm-dd]_[HH:MM:SS].png```
 Goal: Ensure each image file is uniquely timestamped and traceable to its source .txt.
 
+### Input & Output
+![mnt/mnt.png](assets/soal_1/mnt.png)
+
 ### Code Block
 ```c
 void convert_file_to_image(const char *filename_txt) {
@@ -403,6 +411,8 @@ Every successful conversion must be recorded in a conversion.log file inside the
 The log entry format:
 ```[YYYY-mm-dd][HH:MM:SS]: Successfully converted hexadecimal text [filename] to [output_image_name].```
 
+### Input & Output
+![log/log.png](assets/soal_1/clog.png)
 
 ### Code Block
 ```c
@@ -429,7 +439,8 @@ void log_conversion(const char *txt_name, const char *png_name, const char *date
 > - Fills in current date and time, used in naming converted image files and logs.
 > - Logs each conversion process into a file called conversion.log.
 
-
+### Input & Output
+![tree/tree.png](assets/soal_1/tree.png)
 
 
 
