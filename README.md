@@ -442,7 +442,8 @@ void log_conversion(const char *txt_name, const char *png_name, const char *date
 ### Input & Output
 ![tree/tree.png](assets/soal_1/tree.png)
 
-
+### Revision
+> Fixed issue with FUSE mount – previously 'mnt' directory was inaccessible. Adjusted the logic to ensure proper mounting and access.
 
 
 # Soal 3
